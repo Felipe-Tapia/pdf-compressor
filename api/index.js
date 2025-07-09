@@ -12,10 +12,13 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "../public")));
 
-// Configurar multer para subir archivos
+// Configurar multer para subir archivos - usar /tmp en Vercel
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    const uploadDir = path.join(__dirname, "../uploads");
+    // En Vercel, usar /tmp para archivos temporales
+    const uploadDir = process.env.VERCEL
+      ? "/tmp"
+      : path.join(__dirname, "../uploads");
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
@@ -41,43 +44,42 @@ const upload = multer({
   },
 });
 
-// Crear directorio para archivos comprimidos
-const compressedDir = path.join(__dirname, "../compressed");
-if (!fs.existsSync(compressedDir)) {
-  fs.mkdirSync(compressedDir, { recursive: true });
-}
-
 // Función para comprimir PDF usando solo pdf-lib
 async function compressPDF(pdfBytes, compressionLevel) {
-  const pdfDoc = await PDFDocument.load(pdfBytes);
+  try {
+    const pdfDoc = await PDFDocument.load(pdfBytes);
 
-  // Configurar opciones de compresión según el nivel
-  let saveOptions = {
-    useObjectStreams: true,
-    addDefaultPage: false,
-    updateFieldAppearances: false,
-  };
+    // Configurar opciones de compresión según el nivel
+    let saveOptions = {
+      useObjectStreams: true,
+      addDefaultPage: false,
+      updateFieldAppearances: false,
+    };
 
-  switch (compressionLevel) {
-    case "low":
-      saveOptions.objectsPerTick = 50;
-      saveOptions.useObjectStreams = true;
-      break;
-    case "medium":
-      saveOptions.objectsPerTick = 20;
-      saveOptions.useObjectStreams = true;
-      break;
-    case "high":
-      saveOptions.objectsPerTick = 10;
-      saveOptions.useObjectStreams = true;
-      break;
-    case "extreme":
-      saveOptions.objectsPerTick = 5;
-      saveOptions.useObjectStreams = true;
-      break;
+    switch (compressionLevel) {
+      case "low":
+        saveOptions.objectsPerTick = 50;
+        saveOptions.useObjectStreams = true;
+        break;
+      case "medium":
+        saveOptions.objectsPerTick = 20;
+        saveOptions.useObjectStreams = true;
+        break;
+      case "high":
+        saveOptions.objectsPerTick = 10;
+        saveOptions.useObjectStreams = true;
+        break;
+      case "extreme":
+        saveOptions.objectsPerTick = 5;
+        saveOptions.useObjectStreams = true;
+        break;
+    }
+
+    return await pdfDoc.save(saveOptions);
+  } catch (error) {
+    console.error("Error en compressPDF:", error);
+    throw error;
   }
-
-  return await pdfDoc.save(saveOptions);
 }
 
 // Endpoint para subir y comprimir PDF
@@ -89,10 +91,16 @@ app.post("/compress", upload.single("pdf"), async (req, res) => {
 
     const compressionLevel = req.body.compressionLevel || "medium";
     const inputPath = req.file.path;
-    const outputPath = path.join(
-      compressedDir,
-      `compressed-${req.file.filename}`
-    );
+
+    // En Vercel, usar /tmp para archivos temporales
+    const outputDir = process.env.VERCEL
+      ? "/tmp"
+      : path.join(__dirname, "../compressed");
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+
+    const outputPath = path.join(outputDir, `compressed-${req.file.filename}`);
 
     // Leer el archivo PDF
     const pdfBytes = fs.readFileSync(inputPath);
@@ -152,28 +160,59 @@ app.post("/compress", upload.single("pdf"), async (req, res) => {
 
 // Endpoint para descargar archivo comprimido
 app.get("/download/:filename", (req, res) => {
-  const filename = req.params.filename;
-  const filePath = path.join(compressedDir, filename);
+  try {
+    const filename = req.params.filename;
+    // En Vercel, buscar en /tmp
+    const searchDirs = process.env.VERCEL
+      ? ["/tmp"]
+      : [
+          path.join(__dirname, "../compressed"),
+          path.join(__dirname, "../uploads"),
+        ];
 
-  if (fs.existsSync(filePath)) {
-    res.download(filePath, filename);
-  } else {
-    res.status(404).json({ error: "Archivo no encontrado" });
+    let filePath = null;
+    for (const dir of searchDirs) {
+      const testPath = path.join(dir, filename);
+      if (fs.existsSync(testPath)) {
+        filePath = testPath;
+        break;
+      }
+    }
+
+    if (filePath && fs.existsSync(filePath)) {
+      res.download(filePath, filename);
+    } else {
+      res.status(404).json({ error: "Archivo no encontrado" });
+    }
+  } catch (error) {
+    console.error("Error al descargar:", error);
+    res.status(500).json({ error: "Error al descargar el archivo" });
   }
 });
 
 // Endpoint para obtener información del servidor
 app.get("/api/status", (req, res) => {
-  res.json({
-    status: "running",
-    timestamp: new Date().toISOString(),
-    platform: "Vercel",
-  });
+  try {
+    res.json({
+      status: "running",
+      timestamp: new Date().toISOString(),
+      platform: "Vercel",
+      environment: process.env.VERCEL ? "production" : "development",
+    });
+  } catch (error) {
+    console.error("Error en /api/status:", error);
+    res.status(500).json({ error: "Error interno del servidor" });
+  }
 });
 
 // Endpoint raíz - servir la página principal
 app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "../public/index.html"));
+  try {
+    res.sendFile(path.join(__dirname, "../public/index.html"));
+  } catch (error) {
+    console.error("Error al servir index.html:", error);
+    res.status(500).json({ error: "Error al cargar la página" });
+  }
 });
 
 // Para desarrollo local
