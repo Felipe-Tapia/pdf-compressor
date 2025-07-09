@@ -3,7 +3,6 @@ const multer = require("multer");
 const cors = require("cors");
 const path = require("path");
 const fs = require("fs");
-const { exec } = require("child_process");
 const { PDFDocument } = require("pdf-lib");
 
 const app = express();
@@ -39,7 +38,7 @@ const upload = multer({
     }
   },
   limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB máximo
+    fileSize: 25 * 1024 * 1024, // 25MB máximo para Vercel
   },
 });
 
@@ -49,37 +48,39 @@ if (!fs.existsSync(compressedDir)) {
   fs.mkdirSync(compressedDir);
 }
 
-// Función para comprimir usando Ghostscript
-function compressWithGhostscript(inputPath, outputPath, compressionLevel) {
-  return new Promise((resolve, reject) => {
-    let gsCommand;
+// Función para comprimir PDF usando solo pdf-lib
+async function compressPDF(pdfBytes, compressionLevel) {
+  const pdfDoc = await PDFDocument.load(pdfBytes);
 
-    switch (compressionLevel) {
-      case "low":
-        gsCommand = `gs -sDEVICE=pdfwrite -dPDFSETTINGS=/printer -dCompatibilityLevel=1.4 -dNOPAUSE -dQUIET -dBATCH -sOutputFile="${outputPath}" "${inputPath}"`;
-        break;
-      case "medium":
-        gsCommand = `gs -sDEVICE=pdfwrite -dPDFSETTINGS=/ebook -dCompatibilityLevel=1.4 -dNOPAUSE -dQUIET -dBATCH -sOutputFile="${outputPath}" "${inputPath}"`;
-        break;
-      case "high":
-        gsCommand = `gs -sDEVICE=pdfwrite -dPDFSETTINGS=/screen -dCompatibilityLevel=1.4 -dNOPAUSE -dQUIET -dBATCH -sOutputFile="${outputPath}" "${inputPath}"`;
-        break;
-      case "extreme":
-        gsCommand = `gs -sDEVICE=pdfwrite -dPDFSETTINGS=/screen -dCompatibilityLevel=1.4 -dNOPAUSE -dQUIET -dBATCH -dColorImageResolution=72 -dGrayImageResolution=72 -dMonoImageResolution=72 -sOutputFile="${outputPath}" "${inputPath}"`;
-        break;
-      default:
-        gsCommand = `gs -sDEVICE=pdfwrite -dPDFSETTINGS=/ebook -dCompatibilityLevel=1.4 -dNOPAUSE -dQUIET -dBATCH -sOutputFile="${outputPath}" "${inputPath}"`;
-    }
+  // Configurar opciones de compresión según el nivel
+  let saveOptions = {
+    useObjectStreams: true,
+    addDefaultPage: false,
+    updateFieldAppearances: false,
+  };
 
-    exec(gsCommand, (error, stdout, stderr) => {
-      if (error) {
-        console.log("Ghostscript error:", error.message);
-        reject(error);
-      } else {
-        resolve();
-      }
-    });
-  });
+  switch (compressionLevel) {
+    case "low":
+      saveOptions.objectsPerTick = 50;
+      saveOptions.useObjectStreams = true;
+      break;
+    case "medium":
+      saveOptions.objectsPerTick = 20;
+      saveOptions.useObjectStreams = true;
+      break;
+    case "high":
+      saveOptions.objectsPerTick = 10;
+      saveOptions.useObjectStreams = true;
+      // Comprimir más agresivamente
+      break;
+    case "extreme":
+      saveOptions.objectsPerTick = 5;
+      saveOptions.useObjectStreams = true;
+      // Máxima compresión posible con pdf-lib
+      break;
+  }
+
+  return await pdfDoc.save(saveOptions);
 }
 
 // Endpoint para subir y comprimir PDF
@@ -95,66 +96,15 @@ app.post("/compress", upload.single("pdf"), async (req, res) => {
       compressedDir,
       `compressed-${req.file.filename}`
     );
-    let usedGhostscript = false;
-    let compressionError = null;
 
-    // Intentar usar Ghostscript primero (más efectivo)
-    try {
-      let gsCommand;
-      switch (compressionLevel) {
-        case "low":
-          gsCommand = `gs -sDEVICE=pdfwrite -dPDFSETTINGS=/printer -dCompatibilityLevel=1.4 -dNOPAUSE -dQUIET -dBATCH -sOutputFile=\"${outputPath}\" \"${inputPath}\"`;
-          break;
-        case "medium":
-          gsCommand = `gs -sDEVICE=pdfwrite -dPDFSETTINGS=/ebook -dCompatibilityLevel=1.4 -dNOPAUSE -dQUIET -dBATCH -sOutputFile=\"${outputPath}\" \"${inputPath}\"`;
-          break;
-        case "high":
-          gsCommand = `gs -sDEVICE=pdfwrite -dPDFSETTINGS=/screen -dCompatibilityLevel=1.4 -dNOPAUSE -dQUIET -dBATCH -dColorImageResolution=100 -dGrayImageResolution=100 -dMonoImageResolution=100 -sOutputFile=\"${outputPath}\" \"${inputPath}\"`;
-          break;
-        case "extreme":
-          // Parámetros aún más agresivos
-          gsCommand = `gs -sDEVICE=pdfwrite -dPDFSETTINGS=/screen -dCompatibilityLevel=1.4 -dNOPAUSE -dQUIET -dBATCH -dColorImageDownsampleType=/Average -dColorImageResolution=50 -dGrayImageDownsampleType=/Average -dGrayImageResolution=50 -dMonoImageDownsampleType=/Subsample -dMonoImageResolution=50 -sOutputFile=\"${outputPath}\" \"${inputPath}\"`;
-          break;
-        default:
-          gsCommand = `gs -sDEVICE=pdfwrite -dPDFSETTINGS=/ebook -dCompatibilityLevel=1.4 -dNOPAUSE -dQUIET -dBATCH -sOutputFile=\"${outputPath}\" \"${inputPath}\"`;
-      }
-      await new Promise((resolve, reject) => {
-        exec(gsCommand, (error, stdout, stderr) => {
-          if (error) {
-            reject(error);
-          } else {
-            usedGhostscript = true;
-            resolve();
-          }
-        });
-      });
-    } catch (error) {
-      compressionError = error.message;
-      // Fallback a pdf-lib
-      const pdfBytes = fs.readFileSync(inputPath);
-      const pdfDoc = await PDFDocument.load(pdfBytes);
-      let saveOptions = {
-        useObjectStreams: true,
-        addDefaultPage: false,
-        updateFieldAppearances: false,
-      };
-      switch (compressionLevel) {
-        case "low":
-          saveOptions.objectsPerTick = 50;
-          break;
-        case "medium":
-          saveOptions.objectsPerTick = 20;
-          break;
-        case "high":
-          saveOptions.objectsPerTick = 10;
-          break;
-        case "extreme":
-          saveOptions.objectsPerTick = 5;
-          break;
-      }
-      const compressedPdfBytes = await pdfDoc.save(saveOptions);
-      fs.writeFileSync(outputPath, compressedPdfBytes);
-    }
+    // Leer el archivo PDF
+    const pdfBytes = fs.readFileSync(inputPath);
+
+    // Comprimir usando pdf-lib
+    const compressedPdfBytes = await compressPDF(pdfBytes, compressionLevel);
+
+    // Guardar el archivo comprimido
+    fs.writeFileSync(outputPath, compressedPdfBytes);
 
     // Calcular tamaños
     const originalSize = fs.statSync(inputPath).size;
@@ -162,14 +112,17 @@ app.post("/compress", upload.single("pdf"), async (req, res) => {
     if (fs.existsSync(outputPath)) {
       compressedSize = fs.statSync(outputPath).size;
     }
+
     let finalPath = outputPath;
     let wasCompressed = true;
+
     // Si el archivo comprimido es más grande, devolver el original
     if (compressedSize === 0 || compressedSize >= originalSize) {
       finalPath = inputPath;
       compressedSize = originalSize;
       wasCompressed = false;
     }
+
     let ahorro = originalSize - compressedSize;
     if (ahorro < 0) ahorro = 0;
     let compressionRatio =
@@ -187,9 +140,7 @@ app.post("/compress", upload.single("pdf"), async (req, res) => {
       downloadUrl: `/download/${path.basename(finalPath)}`,
       filename: path.basename(finalPath),
       compressionLevel: compressionLevel,
-      usedGhostscript: usedGhostscript,
       wasCompressed: wasCompressed,
-      compressionError: compressionError,
       message: wasCompressed
         ? undefined
         : "No se pudo comprimir más el archivo. Se devuelve el original.",
@@ -219,9 +170,20 @@ app.get("/api/status", (req, res) => {
   res.json({
     status: "running",
     timestamp: new Date().toISOString(),
+    platform: "Vercel",
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`Servidor corriendo en http://localhost:${PORT}`);
+// Endpoint raíz
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
 });
+
+// Para Vercel, necesitamos exportar la app
+if (process.env.NODE_ENV !== "production") {
+  app.listen(PORT, () => {
+    console.log(`Servidor corriendo en http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
