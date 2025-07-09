@@ -2,13 +2,13 @@
   "name": "pdf-compressor",
   "version": "1.0.0",
   "description": "Aplicación web para comprimir archivos PDF",
-  "main": "index.js",
+  "main": "api/index.js",
   "engines": {
     "node": ">=18.0.0"
   },
   "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js"
+    "start": "node api/index.js",
+    "dev": "nodemon api/index.js"
   },
   "dependencies": {
     "express": "^4.18.2",
