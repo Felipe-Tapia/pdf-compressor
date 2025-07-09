@@ -6,19 +6,18 @@ const fs = require("fs");
 const { PDFDocument } = require("pdf-lib");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 
 // Configurar middleware
 app.use(cors());
 app.use(express.json());
-app.use(express.static("public"));
+app.use(express.static(path.join(__dirname, "../public")));
 
 // Configurar multer para subir archivos
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    const uploadDir = "uploads";
+    const uploadDir = path.join(__dirname, "../uploads");
     if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir);
+      fs.mkdirSync(uploadDir, { recursive: true });
     }
     cb(null, uploadDir);
   },
@@ -43,9 +42,9 @@ const upload = multer({
 });
 
 // Crear directorio para archivos comprimidos
-const compressedDir = "compressed";
+const compressedDir = path.join(__dirname, "../compressed");
 if (!fs.existsSync(compressedDir)) {
-  fs.mkdirSync(compressedDir);
+  fs.mkdirSync(compressedDir, { recursive: true });
 }
 
 // Función para comprimir PDF usando solo pdf-lib
@@ -71,12 +70,10 @@ async function compressPDF(pdfBytes, compressionLevel) {
     case "high":
       saveOptions.objectsPerTick = 10;
       saveOptions.useObjectStreams = true;
-      // Comprimir más agresivamente
       break;
     case "extreme":
       saveOptions.objectsPerTick = 5;
       saveOptions.useObjectStreams = true;
-      // Máxima compresión posible con pdf-lib
       break;
   }
 
@@ -174,16 +171,18 @@ app.get("/api/status", (req, res) => {
   });
 });
 
-// Endpoint raíz
+// Endpoint raíz - servir la página principal
 app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
+  res.sendFile(path.join(__dirname, "../public/index.html"));
 });
 
-// Para Vercel, necesitamos exportar la app
+// Para desarrollo local
 if (process.env.NODE_ENV !== "production") {
+  const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
     console.log(`Servidor corriendo en http://localhost:${PORT}`);
   });
 }
 
+// Para Vercel, necesitamos exportar la app
 module.exports = app;
